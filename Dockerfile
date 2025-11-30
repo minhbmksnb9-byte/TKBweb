@@ -64,4 +64,4 @@ EXPOSE 10000
 # ================================
 # RUN GUNICORN
 # ================================
-CMD ["gunicorn", "--workers=4", "--bind=0.0.0.0:10000", "web_server:app"]
+CMD ["gunicorn", "--workers=1", "--bind=0.0.0.0:10000", "web_server:app"]
