@@ -8,9 +8,7 @@ import pytesseract
 import numpy as np
 
 # --- CẤU HÌNH TESSERACT (Đã sửa cho Linux/Docker) ---
-# Trên Docker Linux, tesseract thường đã nằm trong PATH nên không cần set path cứng
-# Nếu cần thiết, dòng dưới đây là mặc định trên Linux:
-# pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+# Thường không cần set path cứng nếu tesseract đã được cài đặt đúng cách.
 
 class TimetableOCR:
     def __init__(self):
@@ -61,7 +59,8 @@ class TimetableOCR:
         x_centers = []
         for c in cnts:
             x, y, w, h = cv2.boundingRect(c)
-            if h > H * 0.4 and w < W * 0.2:
+            # Giảm ngưỡng phát hiện đường dọc, giảm W * 0.4 xuống W * 0.35
+            if h > H * 0.35 and w < W * 0.2:
                 x_centers.append(x + w // 2)
 
         x_centers = sorted(set(x_centers))
@@ -73,7 +72,8 @@ class TimetableOCR:
         bounds = [0] + x_centers + [W]
         bounds = sorted(list(dict.fromkeys(bounds)))
 
-        min_width = W * 0.15
+        # Giảm ngưỡng phát hiện cột tối thiểu
+        min_width = W * 0.1
         filtered = [bounds[0]]
 
         for i in range(1, len(bounds)-1):
@@ -91,35 +91,38 @@ class TimetableOCR:
         if not keyword:
             return "Lỗi: Chưa nhập từ khóa!"
 
-        # Bỏ qua check version để tránh lỗi không cần thiết
-        # try:
-        #     pytesseract.get_tesseract_version()
-        # except:
-        #     return "Lỗi: Tesseract chưa cấu hình!"
-
         img = cv2.imread(self.file_anh_path)
         if img is None:
             return "Lỗi: Không đọc được ảnh!"
 
-        SCALE = 3
+        # 🚀 TỐI ƯU HÓA RAM CHÍNH: Giảm SCALE từ 3 xuống 2. 
+        # Việc giảm SCALE giúp giảm 56% kích thước bộ nhớ so với SCALE 3 (2^2 vs 3^2).
+        SCALE = 2 
         img_big = cv2.resize(img, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img_big, cv2.COLOR_BGR2GRAY)
 
-        bin_inv = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                        cv2.THRESH_BINARY_INV, 15, 5)
-
+        # Sử dụng kích thước ảnh lớn (đã phóng to)
         W, H = img_big.shape[1], img_big.shape[0]
+
+        # Áp dụng ngưỡng trên ảnh xám
+        bin_inv = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                         cv2.THRESH_BINARY_INV, 15, 5)
+
+        # Tách cột
         col_bounds = self.detect_main_columns(bin_inv, W, H)
 
-        # Tìm hàng
+        # Tách hàng
         h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (W // 40, 1))
         h_lines = cv2.dilate(cv2.erode(bin_inv, h_kernel, 1), h_kernel, 1)
 
         cnts, _ = cv2.findContours(h_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        y_coords = [cv2.boundingRect(c)[1] for c in cnts if cv2.boundingRect(c)[2] > W * 0.4]
+        # Giảm ngưỡng chiều rộng để phát hiện hàng: W * 0.4 xuống W * 0.35
+        y_coords = [cv2.boundingRect(c)[1] for c in cnts if cv2.boundingRect(c)[2] > W * 0.35]
         y_coords.sort()
 
         rows = []
+        # Điều chỉnh ngưỡng khoảng cách giữa các hàng để khớp với ảnh đã phóng to SCALE=2
+        # 15 * SCALE = 30
         for i in range(len(y_coords) - 1):
             if y_coords[i+1] - y_coords[i] > 15 * SCALE:
                 rows.append((y_coords[i], y_coords[i+1]))
@@ -127,21 +130,22 @@ class TimetableOCR:
         found = 0
         result_img = img_big.copy()
 
-        # Cấu hình chỉ đọc Tiếng Anh (hoặc thêm tiếng Việt nếu cài gói VIE)
-        custom_config = r'--oem 3 --psm 6' 
+        # ⚙️ TỐI ƯU HÓA CPU (Tesseract): Sử dụng PSM 7 thay vì PSM 6.
+        # PSM 7 (Treat the image as a single text line) thường nhanh hơn và chính xác hơn 
+        # khi OCR các vùng nhỏ (ô trong bảng).
+        custom_config = r'--oem 3 --psm 7' 
 
         for (y1, y2) in rows:
-            # Xóa sleep để chạy nhanh hơn trên server
-            # time.sleep(0.0001)
-
             for i in range(len(col_bounds) - 1):
                 x1, x2 = col_bounds[i], col_bounds[i+1]
 
+                # Cắt vùng ảnh xám (gray) thay vì ảnh nhị phân (bin_inv) để OCR
                 roi = gray[y1+4:y2-4, x1+4:x2-4]
                 if roi.size < 8:
                     continue
 
                 try:
+                    # Chú ý: Có thể tối ưu hơn nếu chỉ OCR ở cột đầu tiên
                     text = pytesseract.image_to_string(roi, lang="eng", config=custom_config)
                 except:
                     text = ""
@@ -153,9 +157,8 @@ class TimetableOCR:
         # Resize lại đúng kích thước gốc
         final_img = cv2.resize(result_img, (img.shape[1], img.shape[0]))
 
-        # Lưu file vào thư mục /tmp hoặc cùng folder để web_server xử lý
+        # Lưu file
         out_name = f"KetQua_{int(time.time())}_{threading.current_thread().name}.jpg"
-        # Lưu thẳng vào folder hiện tại để web_server move đi
         self.output_image_path = os.path.join(os.getcwd(), out_name)
         cv2.imwrite(self.output_image_path, final_img)
 
