@@ -1,76 +1,71 @@
 # ================================
-# BASE UBUNTU (ổn định nhất)
+# Base Image
 # ================================
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ================================
-# CÀI PYTHON + PIP + DEV TOOLS
+# Install Python + Pip
 # ================================
 RUN apt-get update && \
-    apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
-        python3-dev \
-        build-essential \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get install -y python3 python3-pip python3-venv python3-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ================================
-# CÀI TESSERACT + NGÔN NGỮ
+# Install Tesseract + Languages
 # ================================
 RUN apt-get update && \
     apt-get install -y \
         tesseract-ocr \
         tesseract-ocr-vie \
-        tesseract-ocr-eng \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+        tesseract-ocr-eng && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ================================
-# CÀI ĐẶT DEPENDENCIES CHO OPENCV
+# Dependencies for OpenCV
 # ================================
 RUN apt-get update && \
     apt-get install -y \
         libgl1-mesa-glx \
+        libglib2.0-0 \
         libsm6 \
         libxext6 \
         libxrender1 \
-        libglib2.0-0 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+        libjpeg-dev \
+        zlib1g-dev \
+        libpng-dev \
+        libtiff5 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ================================
-# CẤU HÌNH WORKDIR
+# Working directory
 # ================================
 WORKDIR /app
 
 # ================================
-# CÀI REQUIREMENTS
+# Install Python requirements
 # ================================
 COPY requirements.txt .
-
-# Upgrade pip để tránh lỗi build opencv / pillow
-RUN pip3 install --upgrade pip
-
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # ================================
-# COPY CODE
+# Copy source code
 # ================================
 COPY . .
 
 # ================================
-# CONFIG TESSERACT
+# Tesseract path
 # ================================
 ENV TESSDATA_PREFIX="/usr/share/tesseract-ocr/4.00/tessdata"
 
 # ================================
-# RENDER PORT
+# Port for Render
 # ================================
 ENV PORT=10000
 EXPOSE 10000
 
 # ================================
-# RUN GUNICORN (FIX OOM)
+# Run Gunicorn
 # ================================
-CMD ["gunicorn", "--workers=1", "--threads=1", "--timeout=180", "--bind=0.0.0.0:10000", "web_server:app"]
+CMD ["gunicorn", "--workers=1", "--timeout=120", "--bind=0.0.0.0:10000", "web_server:app"]
