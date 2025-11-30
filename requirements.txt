@@ -1,0 +1,6 @@
+Flask
+pytesseract
+opencv-python
+numpy
+gunicorn
+waitress
