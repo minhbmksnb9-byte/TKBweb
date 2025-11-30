@@ -6,11 +6,16 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ================================
-# CÀI PYTHON + PIP
+# CÀI PYTHON + PIP + DEV TOOLS
 # ================================
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip python3-venv && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        build-essential \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ================================
 # CÀI TESSERACT + NGÔN NGỮ
@@ -19,8 +24,8 @@ RUN apt-get update && \
     apt-get install -y \
         tesseract-ocr \
         tesseract-ocr-vie \
-        tesseract-ocr-eng && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+        tesseract-ocr-eng \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ================================
 # CÀI ĐẶT DEPENDENCIES CHO OPENCV
@@ -43,6 +48,10 @@ WORKDIR /app
 # CÀI REQUIREMENTS
 # ================================
 COPY requirements.txt .
+
+# Upgrade pip để tránh lỗi build opencv / pillow
+RUN pip3 install --upgrade pip
+
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # ================================
@@ -62,6 +71,6 @@ ENV PORT=10000
 EXPOSE 10000
 
 # ================================
-# RUN GUNICORN
+# RUN GUNICORN (FIX OOM)
 # ================================
-CMD ["gunicorn", "--workers=1", "--bind=0.0.0.0:10000", "web_server:app"]
+CMD ["gunicorn", "--workers=1", "--threads=1", "--timeout=180", "--bind=0.0.0.0:10000", "web_server:app"]
