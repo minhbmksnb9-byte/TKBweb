@@ -60,4 +60,4 @@ COPY . .
 
 # BƯỚC 5: CHẠY DỊCH VỤ WEB
 ENV PORT 10000
-CMD ["gunicorn", "--workers=4", "--bind", "0.0.0.0:$PORT", "web_server:app"]
+CMD gunicorn --workers=4 --bind "0.0.0.0:$PORT" web_server:app
