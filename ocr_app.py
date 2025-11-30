@@ -1,183 +1,95 @@
-# ocr_app.py — phiên bản tối ưu dành cho Docker/Render
-
-import os
-import re
-import threading
-import time
-import cv2
+from PIL import Image, ImageOps, ImageFilter, ImageDraw
 import pytesseract
-import numpy as np
+import os
+import uuid
+import re
 
-# --- CẤU HÌNH TESSERACT CHO LINUX (RENDER) ---
-# ĐÃ XÓA CÁC ĐƯỜNG DẪN WINDOWS!
-# Tesseract đã được cài đặt vào PATH trong Dockerfile, không cần thiết lập đường dẫn thủ công.
-# TESSDATA_PREFIX cũng đã được thiết lập trong Dockerfile.
-
-try:
-    # Kiểm tra xem Tesseract có sẵn không. Nếu thành công, nó đang hoạt động.
-    pytesseract.get_tesseract_version()
-    # Bạn có thể bỏ qua thông báo này nếu không cần thiết
-    # print("✅ Tesseract đã sẵn sàng trong container.") 
-except pytesseract.TesseractNotFoundError:
-    # Lỗi này chỉ xảy ra nếu Dockerfile cài đặt thất bại
-    print("❌ LỖI NGHIÊM TRỌNG: Tesseract không tìm thấy trong container. Kiểm tra lại Dockerfile.")
-    pass 
-# --- KẾT THÚC CẤU HÌNH ---
-
-
-class TimetableOCR:
-    def __init__(self):
-        self.file_anh_path = None
+class LightweightOCR:
+    def __init__(self, results_dir="static/results"):
+        self.results_dir = results_dir
+        os.makedirs(self.results_dir, exist_ok=True)
         self.output_image_path = None
 
-    # Làm sạch text
     def clean_and_normalize(self, text):
-        text = text.upper()
-        replacements = {
-            'L': '1', 'I': '1', '|': ' ', 'J': '1',
-            'O': '0', 'S': '5', 'Z': '2', 'B': '8',
-            ']': '1', '[': '1', '}': '1', '{': '1'
-        }
-        for a, b in replacements.items():
-            text = text.replace(a, b)
-
+        if text is None:
+            return ""
+        text = str(text).upper()
+        repl = {'L':'1','I':'1','|':' ','J':'1','O':'0','S':'5','Z':'2','B':'8',']':'1','[':'1','}':'1','{':'1'}
+        for a,b in repl.items():
+            text = text.replace(a,b)
         text = re.sub(r"[^A-Z0-9\s]", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    # Kiểm tra khớp từ khóa
-    def is_match(self, row_text, keyword):
-        clean_row = self.clean_and_normalize(row_text)
-        clean_key = self.clean_and_normalize(keyword)
-
-        if not any(c.isdigit() for c in clean_key):
-            return clean_key in clean_row.split()
-
-        tokens = clean_row.split()
-        for idx, token in enumerate(tokens):
-            if token.startswith(clean_key):
-                return True
-            if idx + 1 < len(tokens):
-                if (token + tokens[idx+1]).startswith(clean_key):
-                    return True
-            if clean_key.replace("A", "4") == token or clean_key.replace("4", "A") == token:
-                return True
-
+    def _is_token_match(self, token, keyword):
+        t = self.clean_and_normalize(token)
+        k = self.clean_and_normalize(keyword)
+        if not k:
+            return False
+        if not any(ch.isdigit() for ch in k):
+            return k in t.split()
+        if t.startswith(k):
+            return True
+        if k.replace("A","4") == t or k.replace("4","A") == t:
+            return True
         return False
 
-    # Tìm cột chính
-    def detect_main_columns(self, binary_img, W, H):
-        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(3, H // 40)))
-        v_lines = cv2.dilate(cv2.erode(binary_img, v_kernel, 1), v_kernel, 1)
-
-        cnts, _ = cv2.findContours(v_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        x_centers = []
-        for c in cnts:
-            x, y, w, h = cv2.boundingRect(c)
-            if h > H * 0.4 and w < W * 0.2:
-                x_centers.append(x + w // 2)
-
-        x_centers = sorted(set(x_centers))
-
-        if not x_centers:
-            mid = W // 2
-            return [0, mid, W]
-
-        bounds = [0] + x_centers + [W]
-        bounds = sorted(list(dict.fromkeys(bounds)))
-
-        min_width = W * 0.15
-        filtered = [bounds[0]]
-
-        for i in range(1, len(bounds)-1):
-            if bounds[i+1] - bounds[i] >= min_width:
-                filtered.append(bounds[i])
-
-        filtered.append(bounds[-1])
-        return sorted(list(dict.fromkeys(filtered)))
-
-    # Hàm xử lý chính
-    def process_timetable_columns(self, keyword):
-        # ... (Kiểm tra file và từ khóa giữ nguyên) ...
-        if not self.file_anh_path or not os.path.exists(self.file_anh_path):
+    def process(self, file_path, keyword, lang="eng", max_width=1024, conf_threshold=40):
+        if not file_path or not os.path.exists(file_path):
             return "Lỗi: File ảnh không tồn tại!"
-
-        if not keyword:
-            return "Lỗi: Chưa nhập từ khóa!"
-
-        # KIỂM TRA TESSERACT CUỐI CÙNG (Cần thiết trên mọi môi trường)
         try:
             pytesseract.get_tesseract_version()
         except:
-            # Lỗi này có nghĩa là Dockerfile chưa cài đặt Tesseract đúng cách
-            return "Lỗi: Tesseract chưa cấu hình!" 
-
-        img = cv2.imread(self.file_anh_path)
-        if img is None:
+            return "Lỗi: Tesseract chưa cấu hình!"
+        try:
+            img = Image.open(file_path)
+        except:
             return "Lỗi: Không đọc được ảnh!"
-
-        SCALE = 3
-        img_big = cv2.resize(img, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(img_big, cv2.COLOR_BGR2GRAY)
-
-        bin_inv = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                         cv2.THRESH_BINARY_INV, 15, 5)
-
-        W, H = img_big.shape[1], img_big.shape[0]
-        col_bounds = self.detect_main_columns(bin_inv, W, H)
-
-        # Tìm hàng
-        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (W // 40, 1))
-        h_lines = cv2.dilate(cv2.erode(bin_inv, h_kernel, 1), h_kernel, 1)
-
-        cnts, _ = cv2.findContours(h_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        y_coords = [cv2.boundingRect(c)[1] for c in cnts if cv2.boundingRect(c)[2] > W * 0.4]
-        y_coords.sort()
-
-        rows = []
-        for i in range(len(y_coords) - 1):
-            if y_coords[i+1] - y_coords[i] > 15 * SCALE:
-                rows.append((y_coords[i], y_coords[i+1]))
-
+        w,h = img.size
+        if w > max_width:
+            ratio = max_width / w
+            img = img.resize((int(w*ratio), int(h*ratio)), Image.LANCZOS)
+        img = ImageOps.grayscale(img)
+        img = ImageOps.autocontrast(img)
+        img = img.filter(ImageFilter.MedianFilter(3))
+        data = pytesseract.image_to_data(img, lang=lang, config="--psm 6", output_type=pytesseract.Output.DICT)
+        n_boxes = len(data.get('text', []))
+        draw = ImageDraw.Draw(img.convert("RGB"))
         found = 0
-        result_img = img_big.copy()
-
-        for (y1, y2) in rows:
-            time.sleep(0.0001)
-
-            for i in range(len(col_bounds) - 1):
-                x1, x2 = col_bounds[i], col_bounds[i+1]
-
-                roi = gray[y1+4:y2-4, x1+4:x2-4]
-                if roi.size < 8:
-                    continue
-
-                try:
-                    # Lưu ý: Bạn đang sử dụng 'eng' (Tiếng Anh) cho OCR trong vòng lặp này
-                    # Nếu bạn muốn OCR cho tiếng Việt, hãy đổi sang lang="vie"
-                    text = pytesseract.image_to_string(roi, lang="eng", config="--psm 6") 
-                except:
-                    text = ""
-
-                if self.is_match(text, keyword):
-                    found += 1
-                    cv2.rectangle(result_img, (x1, y1), (x2, y2), (0, 0, 255), 10)
-
-        # Resize lại đúng kích thước gốc
-        final_img = cv2.resize(result_img, (img.shape[1], img.shape[0]))
-
-        # Lưu file tạm
-        out_name = f"KetQua_{os.getpid()}_{threading.current_thread().name}.jpg"
-        # Đã đổi os.getcwd() thành đường dẫn thư mục tạm của bạn
-        self.output_image_path = os.path.join(os.path.join(os.getcwd(), 'static', 'results'), out_name)
-        # SỬA: Hàm process_timetable_columns phải lưu file vào thư mục mà web_server có thể truy cập
-        # Tuy nhiên, trong web_server.py bạn đã đặt logic di chuyển file,
-        # nên chúng ta sẽ giả định cv2.imwrite sẽ lưu vào thư mục làm việc (os.getcwd())
-        
-        # CHÚ Ý QUAN TRỌNG: cv2.imwrite(self.output_image_path, final_img) 
-        # sẽ bị lỗi nếu thư mục cha chưa tồn tại. Tuy nhiên, logic trong web_server đã lo điều này.
-        cv2.imwrite(out_name, final_img)
-        # Giữ lại tên file output
-        self.output_image_path = out_name
-        
-        return f"Tìm kiếm xong! Tổng số ô khớp: {found}"
+        grouped_boxes = []
+        for i in range(n_boxes):
+            txt = data['text'][i]
+            conf = int(data['conf'][i]) if str(data['conf'][i]).lstrip('-').isdigit() else -1
+            if not txt or conf < conf_threshold:
+                continue
+            if self._is_token_match(txt, keyword):
+                x, y, w_box, h_box = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                grouped_boxes.append((x, y, x + w_box, y + h_box))
+                found += 1
+        if grouped_boxes:
+            merged = []
+            grouped_boxes.sort()
+            cur = list(grouped_boxes[0])
+            for b in grouped_boxes[1:]:
+                if b[0] <= cur[2] + 10 and b[1] <= cur[3] + 10:
+                    cur[2] = max(cur[2], b[2])
+                    cur[3] = max(cur[3], b[3])
+                else:
+                    merged.append(tuple(cur))
+                    cur = list(b)
+            merged.append(tuple(cur))
+            out_img = img.convert("RGB")
+            draw = ImageDraw.Draw(out_img)
+            wscale = max(1, int(max(1, out_img.size[0] / 400)))
+            for box in merged:
+                draw.rectangle(box, outline=(255,0,0), width=wscale)
+            name = f"Result_{uuid.uuid4().hex}.jpg"
+            out_path = os.path.join(self.results_dir, name)
+            out_img.save(out_path, quality=85)
+            self.output_image_path = out_path
+        else:
+            name = f"Result_{uuid.uuid4().hex}.jpg"
+            out_path = os.path.join(self.results_dir, name)
+            img.convert("RGB").save(out_path, quality=85)
+            self.output_image_path = out_path
+        return f"Tìm xong! Tổng số ô khớp: {found}"
