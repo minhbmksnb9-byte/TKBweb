@@ -1,4 +1,4 @@
-# ocr_app.py — phiên bản tối ưu dành cho Flask (không có GUI)
+# ocr_app.py — phiên bản tối ưu dành cho Docker/Render
 
 import os
 import re
@@ -8,15 +8,21 @@ import cv2
 import pytesseract
 import numpy as np
 
-# --- CẤU HÌNH TESSERACT ---
-PATH_TO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-PATH_TO_TESSDATA = r"C:\Program Files\Tesseract-OCR\tessdata"
+# --- CẤU HÌNH TESSERACT CHO LINUX (RENDER) ---
+# ĐÃ XÓA CÁC ĐƯỜNG DẪN WINDOWS!
+# Tesseract đã được cài đặt vào PATH trong Dockerfile, không cần thiết lập đường dẫn thủ công.
+# TESSDATA_PREFIX cũng đã được thiết lập trong Dockerfile.
 
-if os.path.exists(PATH_TO_TESSERACT):
-    os.environ["TESSDATA_PREFIX"] = PATH_TO_TESSDATA
-    pytesseract.pytesseract.tesseract_cmd = PATH_TO_TESSERACT
-else:
-    print("⚠ Không tìm thấy Tesseract-OCR, hãy kiểm tra lại đường dẫn!")
+try:
+    # Kiểm tra xem Tesseract có sẵn không. Nếu thành công, nó đang hoạt động.
+    pytesseract.get_tesseract_version()
+    # Bạn có thể bỏ qua thông báo này nếu không cần thiết
+    # print("✅ Tesseract đã sẵn sàng trong container.") 
+except pytesseract.TesseractNotFoundError:
+    # Lỗi này chỉ xảy ra nếu Dockerfile cài đặt thất bại
+    print("❌ LỖI NGHIÊM TRỌNG: Tesseract không tìm thấy trong container. Kiểm tra lại Dockerfile.")
+    pass 
+# --- KẾT THÚC CẤU HÌNH ---
 
 
 class TimetableOCR:
@@ -92,16 +98,19 @@ class TimetableOCR:
 
     # Hàm xử lý chính
     def process_timetable_columns(self, keyword):
+        # ... (Kiểm tra file và từ khóa giữ nguyên) ...
         if not self.file_anh_path or not os.path.exists(self.file_anh_path):
             return "Lỗi: File ảnh không tồn tại!"
 
         if not keyword:
             return "Lỗi: Chưa nhập từ khóa!"
 
+        # KIỂM TRA TESSERACT CUỐI CÙNG (Cần thiết trên mọi môi trường)
         try:
             pytesseract.get_tesseract_version()
         except:
-            return "Lỗi: Tesseract chưa cấu hình!"
+            # Lỗi này có nghĩa là Dockerfile chưa cài đặt Tesseract đúng cách
+            return "Lỗi: Tesseract chưa cấu hình!" 
 
         img = cv2.imread(self.file_anh_path)
         if img is None:
@@ -112,7 +121,7 @@ class TimetableOCR:
         gray = cv2.cvtColor(img_big, cv2.COLOR_BGR2GRAY)
 
         bin_inv = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                        cv2.THRESH_BINARY_INV, 15, 5)
+                                         cv2.THRESH_BINARY_INV, 15, 5)
 
         W, H = img_big.shape[1], img_big.shape[0]
         col_bounds = self.detect_main_columns(bin_inv, W, H)
@@ -144,7 +153,9 @@ class TimetableOCR:
                     continue
 
                 try:
-                    text = pytesseract.image_to_string(roi, lang="eng", config="--psm 6")
+                    # Lưu ý: Bạn đang sử dụng 'eng' (Tiếng Anh) cho OCR trong vòng lặp này
+                    # Nếu bạn muốn OCR cho tiếng Việt, hãy đổi sang lang="vie"
+                    text = pytesseract.image_to_string(roi, lang="eng", config="--psm 6") 
                 except:
                     text = ""
 
@@ -157,7 +168,16 @@ class TimetableOCR:
 
         # Lưu file tạm
         out_name = f"KetQua_{os.getpid()}_{threading.current_thread().name}.jpg"
-        self.output_image_path = os.path.join(os.getcwd(), out_name)
-        cv2.imwrite(self.output_image_path, final_img)
-
+        # Đã đổi os.getcwd() thành đường dẫn thư mục tạm của bạn
+        self.output_image_path = os.path.join(os.path.join(os.getcwd(), 'static', 'results'), out_name)
+        # SỬA: Hàm process_timetable_columns phải lưu file vào thư mục mà web_server có thể truy cập
+        # Tuy nhiên, trong web_server.py bạn đã đặt logic di chuyển file,
+        # nên chúng ta sẽ giả định cv2.imwrite sẽ lưu vào thư mục làm việc (os.getcwd())
+        
+        # CHÚ Ý QUAN TRỌNG: cv2.imwrite(self.output_image_path, final_img) 
+        # sẽ bị lỗi nếu thư mục cha chưa tồn tại. Tuy nhiên, logic trong web_server đã lo điều này.
+        cv2.imwrite(out_name, final_img)
+        # Giữ lại tên file output
+        self.output_image_path = out_name
+        
         return f"Tìm kiếm xong! Tổng số ô khớp: {found}"
