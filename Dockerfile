@@ -1,42 +1,66 @@
-# 1. THAY THẾ IMAGE SLIM BẰNG IMAGE FULL (Ổn định hơn cho CV/OCR)
-FROM python:3.12 
+# =========================================================
+# GIAI ĐOẠN 1: TESSERACT BUILDER (DEBUG ON)
+# Dùng image Debian ổn định để cài Tesseract
+# =========================================================
+FROM debian:bookworm-slim AS tesseract-builder
 
-# BƯỚC 1: CÀI ĐẶT THƯ VIỆN HỆ THỐNG (SYSTEM PACKAGES)
-# Cài đặt Tesseract và OpenCV dependencies
+RUN echo "--- DEBUG: STAGE 1 STARTED: Installing Tesseract and dependencies ---"
+
+# Cài đặt Tesseract và các gói ngôn ngữ + dependencies cần thiết cho Runtime
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    # --- Tesseract và Ngôn ngữ ---
     tesseract-ocr \
     tesseract-ocr-vie \
     tesseract-ocr-eng \
-    # Thư viện phát triển Tesseract và Leptonica (để đảm bảo liên kết)
-    libtesseract-dev \
-    libleptonica-dev \
-    # --- Dependencies cho OpenCV (cv2) ---
     libgl1-mesa-glx \
     libsm6 \
     libxext6 \
     libxrender1 \
-    # Dọn dẹp cache
+    libtesseract5 \
+    libleptonica5 \
  && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# BƯỚC KIỂM TRA: Xác nhận Tesseract đã được cài đặt và nằm trong $PATH
-# (Bước này nên thành công 100% với image python:3.12)
+# DEBUG CHECK 1: Xác nhận Tesseract có sẵn trong Builder Stage
 RUN which tesseract
 RUN tesseract --version 
+RUN echo "--- DEBUG: STAGE 1 COMPLETED SUCCESSFULLY: Tesseract installed. ---"
 
-# BƯỚC 2: CẤU HÌNH TESSDATA_PREFIX VÀ MÔI TRƯỜNG
+
+# =========================================================
+# GIAI ĐOẠN 2: FINAL PYTHON RUNTIME (DEBUG ON)
+# =========================================================
+FROM python:3.12 
+
+RUN echo "--- DEBUG: STARTING STAGE 2 (PYTHON RUNTIME) ---"
+
+# BƯỚC 1: COPY TESSERACT VÀ CÁC THƯ VIỆN CẦN THIẾT TỪ GIAI ĐOẠN 1
+RUN echo "--- DEBUG: COPYING TESSERACT BINARY AND LIBRARIES NOW ---"
+# Sao chép file thực thi Tesseract
+COPY --from=tesseract-builder /usr/bin/tesseract /usr/bin/tesseract
+# Sao chép các thư viện dùng chung mà Tesseract cần
+COPY --from=tesseract-builder /usr/lib/x86_64-linux-gnu/libtesseract.so.5 /usr/lib/x86_64-linux-gnu/
+COPY --from=tesseract-builder /usr/lib/x86_64-linux-gnu/libleptonica.so.5 /usr/lib/x86_64-linux-gnu/
+
+# Sao chép dữ liệu ngôn ngữ
+COPY --from=tesseract-builder /usr/share/tesseract-ocr/ /usr/share/tesseract-ocr/
+
+# BƯỚC 2: CẤU HÌNH MÔI TRƯỜNG
 ENV TESSDATA_PREFIX /usr/share/tesseract-ocr/4.00/tessdata
+# Cập nhật dynamic linker cache
+RUN ldconfig
+
+# DEBUG CHECK 2: Xác nhận binary đã được copy vào môi trường cuối cùng
+RUN echo "--- DEBUG: VERIFYING FINAL PATHS ---"
+RUN ls -l /usr/bin/tesseract
+RUN echo "TESSDATA_PREFIX is set to: $TESSDATA_PREFIX"
 
 # BƯỚC 3: CÀI ĐẶT CODE VÀ THƯ VIỆN PYTHON
 WORKDIR /app
 
-# Sao chép và cài đặt các thư viện Python (từ requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Sao chép toàn bộ code còn lại (web_server.py, ocr_app.py, thư mục static)
 COPY . .
 
 # BƯỚC 4: CHẠY DỊCH VỤ WEB
