@@ -1,32 +1,46 @@
-# Bước 1: Chọn hệ điều hành cơ sở với Python 3.12
-# (Bạn có thể đổi 3.12-slim thành 3.13-slim nếu muốn thử,
-# nhưng 3.12 sẽ ổn định hơn)
+# Sử dụng base image Python 3.12 ổn định (Debian-based)
 FROM python:3.12-slim
 
-# Bước 2: Cập nhật và cài đặt Tesseract + gói ngôn ngữ
-# Chúng ta cài 'tesseract-ocr' (engine) và 'tesseract-ocr-vie' (Tiếng Việt)
-RUN apt-get update && apt-get install -y \
+# BƯỚC 1: CÀI ĐẶT THƯ VIỆN HỆ THỐNG (SYSTEM PACKAGES)
+# Cài đặt Tesseract và OpenCV dependencies
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    # --- Tesseract và Ngôn ngữ ---
     tesseract-ocr \
     tesseract-ocr-vie \
- && rm -rf /var/lib/apt/lists/*
+    tesseract-ocr-eng \
+    # Thư viện xử lý ảnh cốt lõi cho Tesseract (Leptonica)
+    libleptonica-dev \
+    # --- Dependencies cho OpenCV (cv2) ---
+    libgl1-mesa-glx \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    # Dọn dẹp cache để giảm dung lượng image
+ && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Bước 3: (Tùy chọn) Đặt biến môi trường TESSDATA
-# Chỉ định nơi Tesseract tìm file ngôn ngữ đã cài
+# BƯỚC KIỂM TRA: Xác nhận Tesseract đã được cài đặt và nằm trong $PATH
+RUN which tesseract
+RUN tesseract --version 
+
+# BƯỚC 2: CẤU HÌNH TESSDATA_PREFIX VÀ MÔI TRƯỜNG
+# Render/Docker sẽ dùng đường dẫn này để tìm data ngôn ngữ (.traineddata)
 ENV TESSDATA_PREFIX /usr/share/tesseract-ocr/4.00/tessdata
 
-# Bước 4: Cài đặt code ứng dụng
+# BƯỚC 3: CÀI ĐẶT CODE VÀ THƯ VIỆN PYTHON
 WORKDIR /app
 
-# Sao chép file requirements.txt trước để tận dụng cache của Docker
+# Sao chép và cài đặt các thư viện Python (từ requirements.txt)
+# Bao gồm pytesseract, opencv-python, numpy, Flask, gunicorn
 COPY requirements.txt .
-
-# Cài đặt các thư viện Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Sao chép toàn bộ code của bạn vào thư mục /app
+# Sao chép toàn bộ code còn lại (web_server.py, ocr_app.py, thư mục static)
 COPY . .
 
-# Bước 5: Lệnh để chạy ứng dụng
-# Render sẽ tự động cung cấp biến $PORT (thường là 10000)
-# 'app:app' nghĩa là: tìm file 'app.py' và chạy đối tượng 'app' (của Flask)
+# BƯỚC 4: CHẠY DỊCH VỤ WEB
+# Đặt biến PORT Render sẽ sử dụng (thường là 10000)
+ENV PORT 10000
+# Lệnh chạy Gunicorn, trỏ tới file 'web_server.py' và đối tượng Flask 'app'
 CMD ["gunicorn", "--workers=4", "--bind", "0.0.0.0:$PORT", "web_server:app"]
