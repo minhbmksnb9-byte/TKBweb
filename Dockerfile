@@ -1,47 +1,30 @@
-# ======= Stage 1: Build Tesseract =======
-FROM ubuntu:22.04 AS tesseract-builder
+# Sử dụng Python 3.9 Slim để nhẹ
+FROM python:3.9-slim
 
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        tesseract-ocr tesseract-ocr-eng tesseract-ocr-vie \
-        libtesseract-dev libleptonica-dev pkg-config \
-        libpng-dev libjpeg-dev libtiff-dev zlib1g-dev \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Cài đặt các thư viện hệ thống cần thiết cho OpenCV và Tesseract
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# ======= Stage 2: Python Runtime =======
-FROM python:3.12-slim
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG=C.UTF-8
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
-
-# ======= Cài thư viện hệ thống cần thiết =======
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx libsm6 libxext6 libxrender1 libglib2.0-0 \
-        && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# ======= Copy Tesseract từ stage 1 =======
-COPY --from=tesseract-builder /usr/bin/tesseract /usr/bin/tesseract
-COPY --from=tesseract-builder /usr/lib/x86_64-linux-gnu/libtesseract*.so* /usr/lib/x86_64-linux-gnu/
-COPY --from=tesseract-builder /usr/lib/x86_64-linux-gnu/libleptonica*.so* /usr/lib/x86_64-linux-gnu/
-COPY --from=tesseract-builder /usr/share/tesseract-ocr/ /usr/share/tesseract-ocr/
-
-RUN ldconfig
-
-# ======= Workdir và requirements =======
+# Thiết lập thư mục làm việc
 WORKDIR /app
+
+# Copy file requirements trước để tận dụng cache của Docker
 COPY requirements.txt .
+
+# Cài đặt thư viện Python
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy toàn bộ code vào image
 COPY . .
 
-# ======= Tạo folder uploads/results =======
+# Tạo thư mục static nếu chưa có để tránh lỗi permission
 RUN mkdir -p static/uploads static/results
 
-# ======= Port Render =======
-ENV PORT=10000
+# Mở port (Render sẽ tự map port này thông qua biến $PORT)
 EXPOSE 10000
 
-# ======= Run Gunicorn =======
-CMD ["sh", "-c", "gunicorn --workers=1 --threads=2 --timeout=300 --bind 0.0.0.0:$PORT web_server:app"]
+# Chạy ứng dụng bằng Gunicorn
+CMD ["gunicorn", "web_server:app", "--bind", "0.0.0.0:10000", "--timeout", "120"]
