@@ -10,21 +10,31 @@ import numpy as np
 # --- PaddleOCR ---
 from paddleocr import PaddleOCR
 
-# 🚀 KHỞI TẠO PADDLEOCR MỘT LẦN (GLOBAL) 🚀
-# Đã loại bỏ show_log=False và use_gpu=False vì gây lỗi ValueError trong các phiên bản PaddleOCR mới.
-GLOBAL_OCR_ENGINE = PaddleOCR(
-    use_angle_cls=False,
-    lang='en',          # Có thể đổi thành 'vi' nếu bạn cần tiếng Việt
-    rec_algorithm='CRNN',
-    det=False,          # Không cần detect vùng
-    # show_log và use_gpu đã bị xóa để tránh lỗi
-)
+# ❌ BỎ KHỞI TẠO GLOBAL ĐỂ TRÁNH CRASH (OOM) KHI GUNICORN BOOT
+# GLOBAL_OCR_ENGINE = PaddleOCR(...) 
 
 class TimetableOCR:
+    # 🚀 BIẾN LỚP DÙNG ĐỂ LƯU TRỮ OCR ENGINE (Lazy Loading Singleton)
+    _ocr_engine = None 
+    
     def __init__(self):
         self.file_anh_path = None
         self.output_image_path = None
-        self.ocr = GLOBAL_OCR_ENGINE # Sử dụng engine đã khởi tạo global
+        # self.ocr sẽ được gán trong hàm _get_ocr_engine
+
+    # Hàm mới: Khởi tạo OCR Engine chỉ một lần khi request đầu tiên đến
+    def _get_ocr_ocr_engine(self):
+        if TimetableOCR._ocr_engine is None:
+            print("--- KHOI TAO PADDLEOCR: Day la request dau tien ---")
+            # Khởi tạo mô hình (Đã loại bỏ show_log và use_gpu)
+            TimetableOCR._ocr_engine = PaddleOCR(
+                use_angle_cls=False,
+                lang='en',          
+                rec_algorithm='CRNN',
+                det=False          
+            )
+            print("--- KHOI TAO HOAN TAT ---")
+        return TimetableOCR._ocr_engine
 
     # Làm sạch text
     def clean_and_normalize(self, text):
@@ -89,6 +99,9 @@ class TimetableOCR:
 
     # Hàm xử lý chính
     def process_timetable_columns(self, keyword):
+        # ⚠️ BẮT ĐẦU TẢI MODEL TẠI ĐÂY (chỉ lần đầu) ⚠️
+        ocr_instance = self._get_ocr_ocr_engine()
+        
         if not self.file_anh_path or not os.path.exists(self.file_anh_path):
             return "Lỗi: File ảnh không tồn tại!"
 
@@ -135,7 +148,8 @@ class TimetableOCR:
         def paddle_ocr_text(roi):
             if roi.size == 0:
                 return ""
-            result = self.ocr.ocr(roi, det=False) 
+            # Sử dụng ocr_instance
+            result = ocr_instance.ocr(roi, det=False) 
             if result and len(result) > 0 and result[0] is not None and len(result[0]) > 0:
                 return result[0][0] 
             return ""
@@ -157,7 +171,7 @@ class TimetableOCR:
 
         final_img = cv2.resize(result_img, (img.shape[1], img.shape[0]))
 
-        # Lưu file kết quả vào /tmp (thư mục an toàn cho container)
+        # Lưu file kết quả vào /tmp 
         temp_dir = "/tmp" 
         out_name = f"KetQua_{int(time.time())}_{threading.current_thread().name}.jpg"
         self.output_image_path = os.path.join(temp_dir, out_name) 
