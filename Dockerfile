@@ -39,4 +39,4 @@ EXPOSE 10000
 # - w 2: Dùng 2 worker để xử lý request đồng thời (có thể tăng/giảm)
 # - b 0.0.0.0:10000: Bind tới cổng 10000 trên mọi interface
 # - timeout 120: Tăng timeout cho các tác vụ nặng (OCR)
-CMD ["gunicorn", "web_server:app", "--workers", "2", "--bind", "0.0.0.0:10000", "--timeout", "120"]
+CMD ["gunicorn", "web_server:app", "--workers", "1", "--bind", "0.0.0.0:10000", "--timeout", "120"]
