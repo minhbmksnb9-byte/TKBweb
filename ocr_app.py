@@ -11,16 +11,13 @@ import numpy as np
 from paddleocr import PaddleOCR
 
 # 🚀 KHỞI TẠO PADDLEOCR MỘT LẦN (GLOBAL) 🚀
-# Loại bỏ show_log=False vì nó gây lỗi ValueError
+# Đã loại bỏ show_log=False và use_gpu=False vì gây lỗi ValueError trong các phiên bản PaddleOCR mới.
 GLOBAL_OCR_ENGINE = PaddleOCR(
     use_angle_cls=False,
-    lang='en',          # có thể đổi thành 'vi' nếu bạn cần tiếng Việt
-    show_log=False, # ĐÃ SỬA: show_log đã bị loại bỏ ở phiên bản trước nhưng giữ lại
-                    # để bạn dễ dàng debug nếu cần. Tuy nhiên, nếu dùng phiên bản mới 
-                    # của PaddleOCR, bạn cần loại bỏ dòng này. (Giữ nguyên theo bản sửa lỗi gần nhất: đã bỏ)
+    lang='en',          # Có thể đổi thành 'vi' nếu bạn cần tiếng Việt
     rec_algorithm='CRNN',
-    det=False,          # Không cần detect vùng - mình tự cắt ROI
-    use_gpu=False
+    det=False,          # Không cần detect vùng
+    # show_log và use_gpu đã bị xóa để tránh lỗi
 )
 
 class TimetableOCR:
@@ -133,23 +130,20 @@ class TimetableOCR:
         result_img = img_big.copy()
 
         # ------------------------
-        #        THAY THẾ OCR
+        #        Hàm OCR
         # ------------------------
         def paddle_ocr_text(roi):
             if roi.size == 0:
                 return ""
-            # OCR trên ảnh màu (BGR)
             result = self.ocr.ocr(roi, det=False) 
             if result and len(result) > 0 and result[0] is not None and len(result[0]) > 0:
-                return result[0][0] # Lấy text
+                return result[0][0] 
             return ""
 
         # Quét từng ô trong bảng
         for (y1, y2) in rows:
             for i in range(len(col_bounds) - 1):
                 x1, x2 = col_bounds[i], col_bounds[i+1]
-
-                # Cắt ROI từ ảnh màu to
                 roi = img_big[y1+4:y2-4, x1+4:x2-4] 
 
                 try:
@@ -163,7 +157,7 @@ class TimetableOCR:
 
         final_img = cv2.resize(result_img, (img.shape[1], img.shape[0]))
 
-        # Lưu file kết quả vào /tmp (đảm bảo quyền ghi)
+        # Lưu file kết quả vào /tmp (thư mục an toàn cho container)
         temp_dir = "/tmp" 
         out_name = f"KetQua_{int(time.time())}_{threading.current_thread().name}.jpg"
         self.output_image_path = os.path.join(temp_dir, out_name) 
