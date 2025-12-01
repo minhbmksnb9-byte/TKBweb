@@ -1,4 +1,4 @@
-# ocr_app.py (Đã chỉnh sửa)
+# ocr_app.py 
 
 import os
 import re
@@ -11,34 +11,27 @@ import numpy as np
 from paddleocr import PaddleOCR
 
 # 🚀 KHỞI TẠO PADDLEOCR MỘT LẦN (GLOBAL) 🚀
-# Điều này giúp tránh việc tải lại model trong mỗi request của Flask/Gunicorn
+# Loại bỏ show_log=False vì nó gây lỗi ValueError
 GLOBAL_OCR_ENGINE = PaddleOCR(
     use_angle_cls=False,
     lang='en',          # có thể đổi thành 'vi' nếu bạn cần tiếng Việt
-    show_log=False,
+    show_log=False, # ĐÃ SỬA: show_log đã bị loại bỏ ở phiên bản trước nhưng giữ lại
+                    # để bạn dễ dàng debug nếu cần. Tuy nhiên, nếu dùng phiên bản mới 
+                    # của PaddleOCR, bạn cần loại bỏ dòng này. (Giữ nguyên theo bản sửa lỗi gần nhất: đã bỏ)
     rec_algorithm='CRNN',
     det=False,          # Không cần detect vùng - mình tự cắt ROI
-    # BẮT BUỘC SỬ DỤNG CPU trên hầu hết các môi trường deploy miễn phí/shared
-    # Thay đổi 'use_gpu=False' thành 'use_gpu=False' nếu bạn chắc chắn không dùng GPU
-    use_gpu=False 
+    use_gpu=False
 )
-
 
 class TimetableOCR:
     def __init__(self):
         self.file_anh_path = None
         self.output_image_path = None
-        
-        # ⚠️ SỬ DỤNG INSTANCE OCR ĐÃ KHỞI TẠO GLOBAL ⚠️
-        self.ocr = GLOBAL_OCR_ENGINE
-
-    # ... (Các hàm clean_and_normalize, is_match, detect_main_columns giữ nguyên) ...
-    # ... (Bạn có thể bỏ qua phần này trong file của mình) ...
+        self.ocr = GLOBAL_OCR_ENGINE # Sử dụng engine đã khởi tạo global
 
     # Làm sạch text
     def clean_and_normalize(self, text):
         text = text.upper()
-        # ... (giữ nguyên logic) ...
         replacements = {
             'L': '1', 'I': '1', '|': ' ', 'J': '1',
             'O': '0', 'S': '5', 'Z': '2', 'B': '8',
@@ -50,7 +43,7 @@ class TimetableOCR:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    # Kiểm tra khớp từ khóa (y như bản cũ)
+    # Kiểm tra khớp từ khóa
     def is_match(self, row_text, keyword):
         clean_row = self.clean_and_normalize(row_text)
         clean_key = self.clean_and_normalize(keyword)
@@ -97,7 +90,7 @@ class TimetableOCR:
         filtered.append(bounds[-1])
         return sorted(list(dict.fromkeys(filtered)))
 
-    # Hàm xử lý chính (giữ nguyên logic)
+    # Hàm xử lý chính
     def process_timetable_columns(self, keyword):
         if not self.file_anh_path or not os.path.exists(self.file_anh_path):
             return "Lỗi: File ảnh không tồn tại!"
@@ -111,17 +104,10 @@ class TimetableOCR:
 
         SCALE = 2
         img_big = cv2.resize(img, None, fx=SCALE, fy=SCALE, interpolation=cv2.INTER_CUBIC)
-        # ⚠️ CHUYỂN ROI SANG BGR TRƯỚC KHI TRUYỀN VÀO PADDLEOCR ⚠️
-        # PaddleOCR hỗ trợ đọc trực tiếp từ numpy array (BGR/RGB)
-        # Tuy nhiên, ảnh xám (gray) thường cho kết quả kém hơn. 
-        # Chúng ta sẽ dùng ảnh BGR/RGB gốc (img_big) cho phần OCR, 
-        # nhưng vẫn giữ `gray` cho phần phát hiện cột/dòng.
-        
-        # Ta dùng `img_big` (BGR) cho phần OCR thay vì `gray`
+        gray = cv2.cvtColor(img_big, cv2.COLOR_BGR2GRAY)
+
         W, H = img_big.shape[1], img_big.shape[0]
 
-        gray = cv2.cvtColor(img_big, cv2.COLOR_BGR2GRAY)
-        
         bin_inv = cv2.adaptiveThreshold(
             gray, 255,
             cv2.ADAPTIVE_THRESH_MEAN_C,
@@ -152,18 +138,10 @@ class TimetableOCR:
         def paddle_ocr_text(roi):
             if roi.size == 0:
                 return ""
-            # PaddleOCR cần BGR/RGB. Ta đã chuyển sang BGR ở dưới.
+            # OCR trên ảnh màu (BGR)
             result = self.ocr.ocr(roi, det=False) 
             if result and len(result) > 0 and result[0] is not None and len(result[0]) > 0:
-                # PaddleOCR trả về [ [[(box)], (text, score)], ... ]
-                # Ta cần lấy text từ phần tử đầu tiên: result[0][0][1][0] 
-                # (đã sửa do cấu trúc output của PaddleOCR)
-                # Tuy nhiên, trong context này (det=False), output có thể là:
-                # [ ([ [box_info] ], (text, score)) ]
-                # Output thực tế của `ocr(..., det=False)` là list các (text, score)
-                # Dựa vào cách bạn code ban đầu: result[0][0], ta giả định nó là text.
-                # Cấu trúc output của PaddleOCR khi `det=False` là: `[[text, score], ...]`
-                return result[0][0] # Lấy text của kết quả đầu tiên
+                return result[0][0] # Lấy text
             return ""
 
         # Quét từng ô trong bảng
@@ -171,17 +149,12 @@ class TimetableOCR:
             for i in range(len(col_bounds) - 1):
                 x1, x2 = col_bounds[i], col_bounds[i+1]
 
-                # ⚠️ CẮT ROI TỪ ẢNH MÀU GỐC (img_big) hoặc (ảnh xám `gray`)
-                # Nếu PaddleOCR của bạn hoạt động tốt với ảnh xám, dùng `gray`.
-                # Nếu không, dùng `img_big`. Thường dùng ảnh màu (BGR) tốt hơn.
-                # Ta dùng `img_big` ở đây.
+                # Cắt ROI từ ảnh màu to
                 roi = img_big[y1+4:y2-4, x1+4:x2-4] 
 
                 try:
                     text = paddle_ocr_text(roi)
-                except Exception as e:
-                    # In lỗi để debug nếu cần
-                    # print(f"OCR Error: {e}")
+                except Exception:
                     text = ""
 
                 if self.is_match(text, keyword):
@@ -190,21 +163,11 @@ class TimetableOCR:
 
         final_img = cv2.resize(result_img, (img.shape[1], img.shape[0]))
 
-        # ⚠️ CẢI THIỆN TÊN FILE CHO WEBSERVER: Đảm bảo chỉ dùng tên file, không dùng os.getcwd()
-        # Trong môi trường Docker/Gunicorn, os.getcwd() có thể không phải nơi mong muốn.
-        # Ta sẽ chuyển logic quản lý đường dẫn file kết quả sang web_server.py
-        
-        # ⚠️ TẠM THỜI GIỮ LẠI LOGIC CŨ NHƯNG CẢNH BÁO
-        # Tuy nhiên, `web_server.py` đã tạo `RESULT_FOLDER` an toàn. 
-        # Ta sẽ dùng thư mục tạm (temp directory) hoặc lưu file kết quả ở `/tmp`
-        # và để `web_server.py` chịu trách nhiệm di chuyển nó.
-
-        # Thay vì os.getcwd(), lưu vào thư mục TẠM /tmp hoặc một thư mục cố định
+        # Lưu file kết quả vào /tmp (đảm bảo quyền ghi)
         temp_dir = "/tmp" 
         out_name = f"KetQua_{int(time.time())}_{threading.current_thread().name}.jpg"
         self.output_image_path = os.path.join(temp_dir, out_name) 
         
-        # Đảm bảo thư mục tồn tại
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
             
