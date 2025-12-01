@@ -1,37 +1,53 @@
-# web_server.py
+# web_server.py (Đã chỉnh sửa)
 from flask import Flask, request, render_template_string, send_from_directory
 import os, threading, time, shutil
+import tempfile # Thêm thư viện tempfile
 from ocr_app import TimetableOCR
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static") # Chỉ định rõ thư mục static
 
 # ============================
-#  ĐƯỜNG DẪN AN TOÀN
+# ĐƯỜNG DẪN AN TOÀN
 # ============================
+# Đảm bảo đường dẫn tuyệt đối cho môi trường Gunicorn
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "static/uploads")
-RESULT_FOLDER = os.path.join(BASE_DIR, "static/results")
+# ⚠️ Nên dùng thư mục CHẮC CHẮN có quyền ghi, không phải thư mục ứng dụng
+# Tuy nhiên, ta vẫn giữ nguyên để phù hợp với Dockerfile
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+UPLOAD_FOLDER = os.path.join(STATIC_DIR, "uploads")
+RESULT_FOLDER = os.path.join(STATIC_DIR, "results")
 
+# Tạo thư mục nếu chưa có
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
 # ============================
-#  TỰ ĐỘNG XOÁ FILE SAU 5 PHÚT
+# TỰ ĐỘNG XOÁ FILE SAU 5 PHÚT
 # ============================
+# Giữ nguyên logic này, nhưng nên dùng cron job bên ngoài nếu deploy lớn
 def auto_clean_folders():
     while True:
-        time.sleep(300)
+        # ⚠️ Nên tăng thời gian chờ lên 3600 (1 tiếng) hoặc hơn để giảm tải
+        time.sleep(300) 
         for folder in [UPLOAD_FOLDER, RESULT_FOLDER]:
             if os.path.exists(folder):
                 for f in os.listdir(folder):
                     fp = os.path.join(folder, f)
+                    # Kiểm tra thời gian tạo file nếu cần, ở đây ta xoá tất cả
+                    # ⚠️ Cần kiểm tra file nào quá cũ (> 5 phút) để tránh xoá nhầm file đang dùng
+                    # Hiện tại logic cũ vẫn xoá tất cả sau 5 phút ngủ. Ta giữ nguyên
                     try:
-                        os.remove(fp)
+                        # Thêm kiểm tra thời gian để an toàn hơn
+                        if os.path.getmtime(fp) < time.time() - 300: # Xóa file cũ hơn 5 phút
+                            os.remove(fp)
                     except:
                         pass
 
 threading.Thread(target=auto_clean_folders, daemon=True).start()
 
+# ... (HTML_PAGE giữ nguyên) ...
+
+# ⚠️ BẠN CẦN ĐẢM BẢO HTML_PAGE ĐƯỢC ĐỊNH NGHĨA HOÀN CHỈNH Ở ĐÂY
 # ============================
 #  HTML PAGE (GIỮ NGUYÊN)
 # ============================
@@ -107,8 +123,9 @@ HTML_PAGE = """
 </html>
 """
 
+
 # ============================
-#  ROUTES
+# ROUTES
 # ============================
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -123,9 +140,17 @@ def index():
             return render_template_string(HTML_PAGE, result="Tên file trống")
 
         keyword = request.form.get("keyword", "")
-
-        save_path = os.path.join(UPLOAD_FOLDER, img_file.filename)
-        img_file.save(save_path)
+        
+        # ⚠️ TẠO TÊN FILE DUY NHẤT VÀ LƯU VÀO FOLDER UPLOAD
+        # Dùng tên file + timestamp + thread name để đảm bảo unique
+        unique_filename = f"{int(time.time())}_{threading.current_thread().name}_{img_file.filename}"
+        save_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+        
+        try:
+            img_file.save(save_path)
+        except Exception as e:
+            # Lỗi quyền hoặc đường dẫn
+            return render_template_string(HTML_PAGE, result=f"Lỗi lưu file: {e}")
 
         # --- chạy OCR ---
         engine = TimetableOCR()
@@ -136,18 +161,34 @@ def index():
         # --- xuất ảnh kết quả ---
         output = None
         if engine.output_image_path and os.path.exists(engine.output_image_path):
-
-            name = os.path.basename(engine.output_image_path)
+            
+            # Tên file đã được tạo unique trong ocr_app.py
+            name = os.path.basename(engine.output_image_path) 
             new_path = os.path.join(RESULT_FOLDER, name)
-
+            
+            # Di chuyển file từ /tmp sang thư mục static/results
             try:
                 shutil.move(engine.output_image_path, new_path)
-            except:
-                shutil.copy(engine.output_image_path, new_path)
+            except Exception as e:
+                # Lỗi di chuyển (ví dụ: quyền truy cập)
+                return render_template_string(HTML_PAGE, result=f"Lỗi di chuyển file kết quả: {e}")
 
             output = f"/static/results/{name}"
+            # Xóa file ảnh gốc sau khi xử lý (không bắt buộc nhưng nên làm)
+            try:
+                os.remove(save_path)
+            except:
+                pass 
 
-        expire_time = int(time.time()) + 300
+        expire_time = int(time.time()) + 300 # 5 phút
+        
+        # ⚠️ Xóa file kết quả ngay nếu không tìm thấy (giúp dọn dẹp)
+        if output is None and engine.output_image_path and os.path.exists(engine.output_image_path):
+            try:
+                 os.remove(engine.output_image_path) # Xóa file tạm /tmp
+            except:
+                pass
+
 
         return render_template_string(
             HTML_PAGE,
@@ -159,14 +200,16 @@ def index():
     return render_template_string(HTML_PAGE, result=None)
 
 # ============================
-#  STATIC
+# STATIC (Giữ nguyên, Flask sẽ tự map `static` nếu dùng `static_folder="static"`)
 # ============================
 @app.route("/static/<path:path>")
 def static_files(path):
-    return send_from_directory("static", path)
+    # Dùng send_from_directory với đường dẫn tuyệt đối an toàn hơn
+    return send_from_directory(STATIC_DIR, path)
 
 # ============================
-#  MAIN
+# MAIN
 # ============================
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # ⚠️ Đổi cổng mặc định 5000 thành 10000 để khớp với Dockerfile
+    app.run(debug=True, port=10000)
