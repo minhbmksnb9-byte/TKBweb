@@ -1,8 +1,6 @@
-Flask==3.0.0
-gunicorn==21.2.0
-
-paddlepaddle==2.6.2
-paddleocr==2.7.0.2
-
-opencv-python-headless==4.8.1.78
-numpy==1.26.2
+Flask
+gunicorn
+numpy
+paddlepaddle # (Hoặc paddlepaddle-gpu nếu có GPU)
+paddleocr
+opencv-python-headless # Dùng bản headless (không GUI)
