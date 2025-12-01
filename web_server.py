@@ -1,11 +1,13 @@
 # web_server.py
 from flask import Flask, request, render_template_string, send_from_directory
-import os, threading, time
+import os, threading, time, shutil
 from ocr_app import TimetableOCR
 
 app = Flask(__name__)
 
-# Sử dụng đường dẫn tương đối an toàn
+# ============================
+#  ĐƯỜNG DẪN AN TOÀN
+# ============================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "static/uploads")
 RESULT_FOLDER = os.path.join(BASE_DIR, "static/results")
@@ -13,26 +15,26 @@ RESULT_FOLDER = os.path.join(BASE_DIR, "static/results")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
-# ... (Giữ nguyên phần HTML_PAGE và hàm auto_clean_folders) ...
-# Lưu ý: Copy lại toàn bộ nội dung HTML_PAGE và hàm clean từ code cũ của bạn vào đây
-
-# =====================================
-#   TỰ ĐỘNG XÓA FILE CỨ SAU 5 PHÚT
-# =====================================
+# ============================
+#  TỰ ĐỘNG XOÁ FILE SAU 5 PHÚT
+# ============================
 def auto_clean_folders():
     while True:
-        time.sleep(300) 
+        time.sleep(300)
         for folder in [UPLOAD_FOLDER, RESULT_FOLDER]:
             if os.path.exists(folder):
-                for file in os.listdir(folder):
+                for f in os.listdir(folder):
+                    fp = os.path.join(folder, f)
                     try:
-                        os.remove(os.path.join(folder, file))
+                        os.remove(fp)
                     except:
                         pass
 
 threading.Thread(target=auto_clean_folders, daemon=True).start()
 
-# HTML PAGE (Giữ nguyên code HTML của bạn ở đây)
+# ============================
+#  HTML PAGE (GIỮ NGUYÊN)
+# ============================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -105,33 +107,44 @@ HTML_PAGE = """
 </html>
 """
 
+# ============================
+#  ROUTES
+# ============================
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
+
+        # --- xử lý file ảnh ---
         if 'image' not in request.files:
             return render_template_string(HTML_PAGE, result="Chưa chọn file")
-            
+
         img_file = request.files["image"]
-        if img_file.filename == '':
-             return render_template_string(HTML_PAGE, result="Tên file rỗng")
+        if img_file.filename == "":
+            return render_template_string(HTML_PAGE, result="Tên file trống")
 
         keyword = request.form.get("keyword", "")
 
         save_path = os.path.join(UPLOAD_FOLDER, img_file.filename)
         img_file.save(save_path)
 
+        # --- chạy OCR ---
         engine = TimetableOCR()
         engine.file_anh_path = save_path
 
         result = engine.process_timetable_columns(keyword)
 
+        # --- xuất ảnh kết quả ---
         output = None
         if engine.output_image_path and os.path.exists(engine.output_image_path):
+
             name = os.path.basename(engine.output_image_path)
             new_path = os.path.join(RESULT_FOLDER, name)
-            # Dùng shutil.move hoặc os.rename nhưng cẩn thận cross-device
-            import shutil
-            shutil.move(engine.output_image_path, new_path)
+
+            try:
+                shutil.move(engine.output_image_path, new_path)
+            except:
+                shutil.copy(engine.output_image_path, new_path)
+
             output = f"/static/results/{name}"
 
         expire_time = int(time.time()) + 300
@@ -145,11 +158,15 @@ def index():
 
     return render_template_string(HTML_PAGE, result=None)
 
-
+# ============================
+#  STATIC
+# ============================
 @app.route("/static/<path:path>")
 def static_files(path):
     return send_from_directory("static", path)
 
+# ============================
+#  MAIN
+# ============================
 if __name__ == "__main__":
-    # Chỉ chạy debug khi ở local, trên Render sẽ dùng Gunicorn
     app.run(debug=True, port=5000)
